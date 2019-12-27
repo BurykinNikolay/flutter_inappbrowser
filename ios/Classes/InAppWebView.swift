@@ -1,6 +1,6 @@
 //
 //  InAppWebView.swift
-//  flutter_inappbrowser
+//  flutter_inappwebview
 //
 //  Created by Lorenzo on 21/10/18.
 //
@@ -39,7 +39,235 @@ func JSONStringify(value: Any, prettyPrinted: Bool = false) -> String {
     return ""
 }
 
-let JAVASCRIPT_BRIDGE_NAME = "flutter_inappbrowser"
+let JAVASCRIPT_BRIDGE_NAME = "flutter_inappwebview"
+
+// https://github.com/taylorhakes/promise-polyfill/blob/master/src/index.js
+let promisePolyfillJS = """
+if (window.Promise == null) {
+  var setTimeoutFunc = setTimeout;
+  function isArray(x) {
+    return Boolean(x && typeof x.length !== "undefined");
+  };
+  function noop() {}
+  function bind(fn, thisArg) {
+    return function() {
+      fn.apply(thisArg, arguments);
+    };
+  };
+  function Promise(fn) {
+    if (!(this instanceof Promise))
+      throw new TypeError("Promises must be constructed via new");
+    if (typeof fn !== "function") throw new TypeError("not a function");
+    this._state = 0;
+    this._handled = false;
+    this._value = undefined;
+    this._deferreds = [];
+    doResolve(fn, this);
+  };
+  function handle(self, deferred) {
+    while (self._state === 3) {
+      self = self._value;
+    }
+    if (self._state === 0) {
+      self._deferreds.push(deferred);
+      return;
+    }
+    self._handled = true;
+    Promise._immediateFn(function() {
+      var cb = self._state === 1 ? deferred.onFulfilled : deferred.onRejected;
+      if (cb === null) {
+        (self._state === 1 ? resolve : reject)(deferred.promise, self._value);
+        return;
+      }
+      var ret;
+      try {
+        ret = cb(self._value);
+      } catch (e) {
+        reject(deferred.promise, e);
+        return;
+      }
+      resolve(deferred.promise, ret);
+    });
+  };
+  function resolve(self, newValue) {
+    try {
+      if (newValue === self)
+        throw new TypeError("A promise cannot be resolved with itself.");
+      if (
+        newValue &&
+        (typeof newValue === "object" || typeof newValue === "function")
+      ) {
+        var then = newValue.then;
+        if (newValue instanceof Promise) {
+          self._state = 3;
+          self._value = newValue;
+          finale(self);
+          return;
+        } else if (typeof then === "function") {
+          doResolve(bind(then, newValue), self);
+          return;
+        }
+      }
+      self._state = 1;
+      self._value = newValue;
+      finale(self);
+    } catch (e) {
+      reject(self, e);
+    }
+  };
+  function reject(self, newValue) {
+    self._state = 2;
+    self._value = newValue;
+    finale(self);
+  };
+  function finale(self) {
+    if (self._state === 2 && self._deferreds.length === 0) {
+      Promise._immediateFn(function() {
+        if (!self._handled) {
+          Promise._unhandledRejectionFn(self._value);
+        }
+      });
+    }
+    for (var i = 0, len = self._deferreds.length; i < len; i++) {
+      handle(self, self._deferreds[i]);
+    }
+    self._deferreds = null;
+  };
+  function Handler(onFulfilled, onRejected, promise) {
+    this.onFulfilled = typeof onFulfilled === "function" ? onFulfilled : null;
+    this.onRejected = typeof onRejected === "function" ? onRejected : null;
+    this.promise = promise;
+  };
+  function doResolve(fn, self) {
+    var done = false;
+    try {
+      fn(
+        function(value) {
+          if (done) return;
+          done = true;
+          resolve(self, value);
+        },
+        function(reason) {
+          if (done) return;
+          done = true;
+          reject(self, reason);
+        }
+      );
+    } catch (ex) {
+      if (done) return;
+      done = true;
+      reject(self, ex);
+    }
+  };
+  Promise.prototype["catch"] = function(onRejected) {
+    return this.then(null, onRejected);
+  };
+  Promise.prototype.then = function(onFulfilled, onRejected) {
+    var prom = new this.constructor(noop);
+    handle(this, new Handler(onFulfilled, onRejected, prom));
+    return prom;
+  };
+  Promise.prototype["finally"] = function finallyConstructor(callback) {
+    var constructor = this.constructor;
+    return this.then(
+      function(value) {
+        return constructor.resolve(callback()).then(function() {
+          return value;
+        });
+      },
+      function(reason) {
+        return constructor.resolve(callback()).then(function() {
+          return constructor.reject(reason);
+        });
+      }
+    );
+  };
+  Promise.all = function(arr) {
+    return new Promise(function(resolve, reject) {
+      if (!isArray(arr)) {
+        return reject(new TypeError("Promise.all accepts an array"));
+      }
+      var args = Array.prototype.slice.call(arr);
+      if (args.length === 0) return resolve([]);
+      var remaining = args.length;
+      function res(i, val) {
+        try {
+          if (val && (typeof val === "object" || typeof val === "function")) {
+            var then = val.then;
+            if (typeof then === "function") {
+              then.call(
+                val,
+                function(val) {
+                  res(i, val);
+                },
+                reject
+              );
+              return;
+            }
+          }
+          args[i] = val;
+          if (--remaining === 0) {
+            resolve(args);
+          }
+        } catch (ex) {
+          reject(ex);
+        }
+      }
+      for (var i = 0; i < args.length; i++) {
+        res(i, args[i]);
+      }
+    });
+  };
+  Promise.resolve = function(value) {
+    if (value && typeof value === "object" && value.constructor === Promise) {
+      return value;
+    }
+
+    return new Promise(function(resolve) {
+      resolve(value);
+    });
+  };
+  Promise.reject = function(value) {
+    return new Promise(function(resolve, reject) {
+      reject(value);
+    });
+  };
+  Promise.race = function(arr) {
+    return new Promise(function(resolve, reject) {
+      if (!isArray(arr)) {
+        return reject(new TypeError("Promise.race accepts an array"));
+      }
+      for (var i = 0, len = arr.length; i < len; i++) {
+        Promise.resolve(arr[i]).then(resolve, reject);
+      }
+    });
+  };
+  Promise._immediateFn =
+    (typeof setImmediate === "function" &&
+      function(fn) {
+        setImmediate(fn);
+      }) ||
+    function(fn) {
+      setTimeoutFunc(fn, 0);
+    };
+  Promise._unhandledRejectionFn = function _unhandledRejectionFn(err) {
+    if (typeof console !== "undefined" && console) {
+      console.warn("Possible Unhandled Promise Rejection:", err);
+    }
+  };
+}
+"""
+
+let javaScriptBridgeJS = """
+window.\(JAVASCRIPT_BRIDGE_NAME) = {};
+window.\(JAVASCRIPT_BRIDGE_NAME).callHandler = function() {
+    var _callHandlerID = setTimeout(function(){});
+    window.webkit.messageHandlers['callHandler'].postMessage( {'handlerName': arguments[0], '_callHandlerID': _callHandlerID, 'args': JSON.stringify(Array.prototype.slice.call(arguments, 1))} );
+    return new Promise(function(resolve, reject) {
+        window.\(JAVASCRIPT_BRIDGE_NAME)[_callHandlerID] = resolve;
+    });
+}
+"""
 
 // the message needs to be concatenated with '' in order to have the same behavior like on Android
 let consoleLogJS = """
@@ -71,18 +299,13 @@ let consoleLogJS = """
 })(window.console);
 """
 
-let javaScriptBridgeJS = """
-window.\(JAVASCRIPT_BRIDGE_NAME) = {};
-window.\(JAVASCRIPT_BRIDGE_NAME).callHandler = function() {
-    var _callHandlerID = setTimeout(function(){});
-    window.webkit.messageHandlers['callHandler'].postMessage( {'handlerName': arguments[0], '_callHandlerID': _callHandlerID, 'args': JSON.stringify(Array.prototype.slice.call(arguments, 1))} );
-    return new Promise(function(resolve, reject) {
-        window.\(JAVASCRIPT_BRIDGE_NAME)[_callHandlerID] = resolve;
-    });
+let printJS = """
+window.print = function() {
+    window.\(JAVASCRIPT_BRIDGE_NAME).callHandler("onPrint", window.location.href);
 }
 """
 
-let platformReadyJS = "window.dispatchEvent(new Event('flutterInAppBrowserPlatformReady'));";
+let platformReadyJS = "window.dispatchEvent(new Event('flutterInAppWebViewPlatformReady'));";
 
 let findTextHighlightJS = """
 var wkwebview_SearchResultCount = 0;
@@ -234,7 +457,7 @@ function wkwebview_FindNext(forward) {
 }
 """
 
-let variableForOnLoadResourceJS = "window._flutter_inappbrowser_useOnLoadResource"
+let variableForOnLoadResourceJS = "window._flutter_inappwebview_useOnLoadResource"
 let enableVariableForOnLoadResourceJS = "\(variableForOnLoadResourceJS) = $PLACEHOLDER_VALUE;"
 
 let resourceObserverJS = """
@@ -250,7 +473,7 @@ let resourceObserverJS = """
 })();
 """
 
-let variableForShouldInterceptAjaxRequestJS = "window._flutter_inappbrowser_useShouldInterceptAjaxRequest"
+let variableForShouldInterceptAjaxRequestJS = "window._flutter_inappwebview_useShouldInterceptAjaxRequest"
 let enableVariableForShouldInterceptAjaxRequestJS = "\(variableForShouldInterceptAjaxRequestJS) = $PLACEHOLDER_VALUE;"
 
 let interceptAjaxRequestsJS = """
@@ -258,25 +481,49 @@ let interceptAjaxRequestsJS = """
   var send = ajax.prototype.send;
   var open = ajax.prototype.open;
   var setRequestHeader = ajax.prototype.setRequestHeader;
-  ajax.prototype._flutter_inappbrowser_url = null;
-  ajax.prototype._flutter_inappbrowser_method = null;
-  ajax.prototype._flutter_inappbrowser_isAsync = null;
-  ajax.prototype._flutter_inappbrowser_user = null;
-  ajax.prototype._flutter_inappbrowser_password = null;
-  ajax.prototype._flutter_inappbrowser_password = null;
-  ajax.prototype._flutter_inappbrowser_already_onreadystatechange_wrapped = false;
-  ajax.prototype._flutter_inappbrowser_request_headers = {};
+  ajax.prototype._flutter_inappwebview_url = null;
+  ajax.prototype._flutter_inappwebview_method = null;
+  ajax.prototype._flutter_inappwebview_isAsync = null;
+  ajax.prototype._flutter_inappwebview_user = null;
+  ajax.prototype._flutter_inappwebview_password = null;
+  ajax.prototype._flutter_inappwebview_password = null;
+  ajax.prototype._flutter_inappwebview_already_onreadystatechange_wrapped = false;
+  ajax.prototype._flutter_inappwebview_request_headers = {};
+  function convertRequestResponse(request, callback) {
+    if (request.response != null && request.responseType != null) {
+      switch (request.responseType) {
+        case 'arraybuffer':
+          callback(new Uint8Array(request.response));
+          return;
+        case 'blob':
+          const reader = new FileReader();
+          reader.addEventListener('loadend', function() {
+            callback(new Uint8Array(reader.result));
+          });
+          reader.readAsArrayBuffer(blob);
+          return;
+        case 'document':
+          callback(request.response.documentElement.outerHTML);
+          return;
+        case 'json':
+          callback(request.response);
+          return;
+      };
+    }
+    callback(null);
+  };
   ajax.prototype.open = function(method, url, isAsync, user, password) {
     isAsync = (isAsync != null) ? isAsync : true;
-    this._flutter_inappbrowser_url = url;
-    this._flutter_inappbrowser_method = method;
-    this._flutter_inappbrowser_isAsync = isAsync;
-    this._flutter_inappbrowser_user = user;
-    this._flutter_inappbrowser_password = password;
+    this._flutter_inappwebview_url = url;
+    this._flutter_inappwebview_method = method;
+    this._flutter_inappwebview_isAsync = isAsync;
+    this._flutter_inappwebview_user = user;
+    this._flutter_inappwebview_password = password;
+    this._flutter_inappwebview_request_headers = {};
     open.call(this, method, url, isAsync, user, password);
   };
   ajax.prototype.setRequestHeader = function(header, value) {
-    this._flutter_inappbrowser_request_headers[header] = value;
+    this._flutter_inappwebview_request_headers[header] = value;
     setRequestHeader.call(this, header, value);
   };
   function handleEvent(e) {
@@ -293,43 +540,48 @@ let interceptAjaxRequestsJS = """
           responseHeaders[header] = value;
         });
       }
-      var ajaxRequest = {
-        method: this._flutter_inappbrowser_method,
-        url: this._flutter_inappbrowser_url,
-        isAsync: this._flutter_inappbrowser_isAsync,
-        user: this._flutter_inappbrowser_user,
-        password: this._flutter_inappbrowser_password,
-        withCredentials: this.withCredentials,
-        headers: this._flutter_inappbrowser_request_headers,
-        readyState: this.readyState,
-        status: this.status,
-        responseURL: this.responseURL,
-        responseType: this.responseType,
-        responseText: this.responseText,
-        statusText: this.statusText,
-        responseHeaders, responseHeaders,
-        event: {
-          type: e.type,
-          loaded: e.loaded,
-          lengthComputable: e.lengthComputable
-        }
-      };
-      window.\(JAVASCRIPT_BRIDGE_NAME).callHandler('onAjaxProgress', ajaxRequest).then(function(result) {
-        if (result != null) {
-          switch (result) {
-            case 0:
-              self.abort();
-              return;
-          };
-        }
+      convertRequestResponse(this, function(response) {
+        var ajaxRequest = {
+          method: self._flutter_inappwebview_method,
+          url: self._flutter_inappwebview_url,
+          isAsync: self._flutter_inappwebview_isAsync,
+          user: self._flutter_inappwebview_user,
+          password: self._flutter_inappwebview_password,
+          withCredentials: self.withCredentials,
+          headers: self._flutter_inappwebview_request_headers,
+          readyState: self.readyState,
+          status: self.status,
+          responseURL: self.responseURL,
+          responseType: self.responseType,
+          response: response,
+          responseText: (self.responseType == 'text' || self.responseType == '') ? self.responseText : null,
+          responseXML: (self.responseType == 'document' && self.responseXML != null) ? self.responseXML.documentElement.outerHTML : null,
+          statusText: self.statusText,
+          responseHeaders, responseHeaders,
+          event: {
+            type: e.type,
+            loaded: e.loaded,
+            lengthComputable: e.lengthComputable,
+            total: e.total
+          }
+        };
+        window.\(JAVASCRIPT_BRIDGE_NAME).callHandler('onAjaxProgress', ajaxRequest).then(function(result) {
+          if (result != null) {
+            switch (result) {
+              case 0:
+                self.abort();
+                return;
+            };
+          }
+        });
       });
     }
   };
   ajax.prototype.send = function(data) {
     var self = this;
     if (window.\(variableForShouldInterceptAjaxRequestJS) == null || window.\(variableForShouldInterceptAjaxRequestJS) == true) {
-      if (!this._flutter_inappbrowser_already_onreadystatechange_wrapped) {
-        this._flutter_inappbrowser_already_onreadystatechange_wrapped = true;
+      if (!this._flutter_inappwebview_already_onreadystatechange_wrapped) {
+        this._flutter_inappwebview_already_onreadystatechange_wrapped = true;
         var onreadystatechange = this.onreadystatechange;
         this.onreadystatechange = function() {
           if (window.\(variableForShouldInterceptAjaxRequestJS) == null || window.\(variableForShouldInterceptAjaxRequestJS) == true) {
@@ -344,33 +596,37 @@ let interceptAjaxRequestsJS = """
                 responseHeaders[header] = value;
               });
             }
-            var ajaxRequest = {
-              method: this._flutter_inappbrowser_method,
-              url: this._flutter_inappbrowser_url,
-              isAsync: this._flutter_inappbrowser_isAsync,
-              user: this._flutter_inappbrowser_user,
-              password: this._flutter_inappbrowser_password,
-              withCredentials: this.withCredentials,
-              headers: this._flutter_inappbrowser_request_headers,
-              readyState: this.readyState,
-              status: this.status,
-              responseURL: this.responseURL,
-              responseType: this.responseType,
-              responseText: this.responseText,
-              statusText: this.statusText,
-              responseHeaders: responseHeaders
-            };
-            window.\(JAVASCRIPT_BRIDGE_NAME).callHandler('onAjaxReadyStateChange', ajaxRequest).then(function(result) {
-              if (result != null) {
-                switch (result) {
-                  case 0:
-                    self.abort();
-                    return;
-                };
-              }
-              if (onreadystatechange != null) {
-                onreadystatechange();
-              }
+            convertRequestResponse(this, function(response) {
+              var ajaxRequest = {
+                method: self._flutter_inappwebview_method,
+                url: self._flutter_inappwebview_url,
+                isAsync: self._flutter_inappwebview_isAsync,
+                user: self._flutter_inappwebview_user,
+                password: self._flutter_inappwebview_password,
+                withCredentials: self.withCredentials,
+                headers: self._flutter_inappwebview_request_headers,
+                readyState: self.readyState,
+                status: self.status,
+                responseURL: self.responseURL,
+                responseType: self.responseType,
+                response: response,
+                responseText: (self.responseType == 'text' || self.responseType == '') ? self.responseText : null,
+                responseXML: (self.responseType == 'document' && self.responseXML != null) ? self.responseXML.documentElement.outerHTML : null,
+                statusText: self.statusText,
+                responseHeaders: responseHeaders
+              };
+              window.\(JAVASCRIPT_BRIDGE_NAME).callHandler('onAjaxReadyStateChange', ajaxRequest).then(function(result) {
+                if (result != null) {
+                  switch (result) {
+                    case 0:
+                      self.abort();
+                      return;
+                  };
+                }
+                if (onreadystatechange != null) {
+                  onreadystatechange();
+                }
+              });
             });
           } else if (onreadystatechange != null) {
             onreadystatechange();
@@ -383,15 +639,17 @@ let interceptAjaxRequestsJS = """
       this.addEventListener('progress', handleEvent);
       this.addEventListener('error', handleEvent);
       this.addEventListener('abort', handleEvent);
+      this.addEventListener('timeout', handleEvent);
       var ajaxRequest = {
         data: data,
-        method: this._flutter_inappbrowser_method,
-        url: this._flutter_inappbrowser_url,
-        isAsync: this._flutter_inappbrowser_isAsync,
-        user: this._flutter_inappbrowser_user,
-        password: this._flutter_inappbrowser_password,
+        method: this._flutter_inappwebview_method,
+        url: this._flutter_inappwebview_url,
+        isAsync: this._flutter_inappwebview_isAsync,
+        user: this._flutter_inappwebview_user,
+        password: this._flutter_inappwebview_password,
         withCredentials: this.withCredentials,
-        headers: this._flutter_inappbrowser_request_headers
+        headers: this._flutter_inappwebview_request_headers,
+        responseType: this.responseType
       };
       window.\(JAVASCRIPT_BRIDGE_NAME).callHandler('shouldInterceptAjaxRequest', ajaxRequest).then(function(result) {
         if (result != null) {
@@ -402,11 +660,20 @@ let interceptAjaxRequestsJS = """
           };
           data = result.data;
           self.withCredentials = result.withCredentials;
+          if (result.responseType != null) {
+            self.responseType = result.responseType;
+          };
           for (var header in result.headers) {
             var value = result.headers[header];
-            self.setRequestHeader(header, value);
+            var flutter_inappwebview_value = self._flutter_inappwebview_request_headers[header];
+            if (flutter_inappwebview_value == null) {
+              self._flutter_inappwebview_request_headers[header] = value;
+            } else {
+              self._flutter_inappwebview_request_headers[header] += ', ' + value;
+            }
+            setRequestHeader.call(self, header, value);
           };
-          if ((self._flutter_inappbrowser_method != result.method && result.method != null) || (self._flutter_inappbrowser_url != result.url && result.url != null)) {
+          if ((self._flutter_inappwebview_method != result.method && result.method != null) || (self._flutter_inappwebview_url != result.url && result.url != null)) {
             self.abort();
             self.open(result.method, result.url, result.isAsync, result.user, result.password);
             return;
@@ -421,7 +688,7 @@ let interceptAjaxRequestsJS = """
 })(window.XMLHttpRequest);
 """
 
-let variableForShouldInterceptFetchRequestsJS = "window._flutter_inappbrowser_useShouldInterceptFetchRequest"
+let variableForShouldInterceptFetchRequestsJS = "window._flutter_inappwebview_useShouldInterceptFetchRequest"
 let enableVariableForShouldInterceptFetchRequestsJS = "\(variableForShouldInterceptFetchRequestsJS) = $PLACEHOLDER_VALUE;"
 
 let interceptFetchRequestsJS = """
@@ -557,22 +824,44 @@ let interceptFetchRequestsJS = """
                 controller.abort();
                 break;
             }
-            var resultResource = (result.resource != null) ? result.resource : resource;
-            var resultInit = init;
-            if (result.init != null) {
-              resultInit.method = result.method;
-              resultInit.headers = convertJsonToHeaders(result.headers);
-              resultInit.body = convertArrayIntBodyToUint8Array(result.body);
-              resultInit.mode = result.mode;
-              resultInit.credentials = convertJsonToCredential(result.credentials);
-              resultInit.cache = result.cache;
-              resultInit.redirect = result.redirect;
-              resultInit.referrer = result.referrer;
-              resultInit.referrerPolicy = result.referrerPolicy;
-              resultInit.integrity = result.integrity;
-              resultInit.keepalive = result.keepalive;
+            resource = (result.url != null) ? result.url : resource;
+            if (init == null) {
+              init = {};
             }
-            return fetch(resultResource, resultInit);
+            if (result.method != null && result.method.length > 0) {
+              init.method = result.method;
+            }
+            if (result.headers != null && Object.keys(result.headers).length > 0) {
+              init.headers = convertJsonToHeaders(result.headers);
+            }
+            if (result.body != null && result.body.length > 0)   {
+              init.body = convertArrayIntBodyToUint8Array(result.body);
+            }
+            if (result.mode != null && result.mode.length > 0) {
+              init.mode = result.mode;
+            }
+            if (result.credentials != null) {
+              init.credentials = convertJsonToCredential(result.credentials);
+            }
+            if (result.cache != null && result.cache.length > 0) {
+              init.cache = result.cache;
+            }
+            if (result.redirect != null && result.redirect.length > 0) {
+              init.redirect = result.redirect;
+            }
+            if (result.referrer != null && result.referrer.length > 0) {
+              init.referrer = result.referrer;
+            }
+            if (result.referrerPolicy != null && result.referrerPolicy.length > 0) {
+              init.referrerPolicy = result.referrerPolicy;
+            }
+            if (result.integrity != null && result.integrity.length > 0) {
+              init.integrity = result.integrity;
+            }
+            if (result.keepalive != null) {
+              init.keepalive = result.keepalive;
+            }
+            return fetch(resource, init);
           }
           return fetch(resource, init);
         });
@@ -584,49 +873,27 @@ let interceptFetchRequestsJS = """
 })(window.fetch);
 """
 
-let interceptNavigationStateChangeJS = """
-(function(window, document, history) {
-  history.pushState = (function(f) {
-    return function pushState(){
-      var ret = f.apply(this, arguments);
-      window.dispatchEvent(new Event('pushstate'));
-      window.dispatchEvent(new Event('_flutter_inappbrowser_locationchange'));
-      return ret;
-    };
-  })(history.pushState);
-  history.replaceState = ( function(f) {
-    return function replaceState(){
-      var ret = f.apply(this, arguments);
-      window.dispatchEvent(new Event('replacestate'));
-      window.dispatchEvent(new Event('_flutter_inappbrowser_locationchange'));
-      return ret;
-    };
-  })(history.replaceState);
-  window.addEventListener('popstate',function() {
-    window.dispatchEvent(new Event('_flutter_inappbrowser_locationchange'));
-  });
-  window.addEventListener('_flutter_inappbrowser_locationchange', function() {
-    window.webkit.messageHandlers["onNavigationStateChange"].postMessage(JSON.stringify({
-      url: document.location.href
-    }));
-  });
-})(window, window.document, window.history);
-"""
-
 public class InAppWebView: WKWebView, UIScrollViewDelegate, WKUIDelegate, WKNavigationDelegate, WKScriptMessageHandler {
 
     var IABController: InAppBrowserWebViewController?
-    var IAWController: FlutterWebViewController?
+    var channel: FlutterMethodChannel?
     var options: InAppWebViewOptions?
     var currentURL: URL?
     var startPageTime: Int64 = 0
     static var credentialsProposed: [URLCredential] = []
+    var lastScrollX: CGFloat = 0
+    var lastScrollY: CGFloat = 0
+    var isPausedTimers = false
+    var isPausedTimersCompletionHandler: (() -> Void)?
+    // This flag is used to block the "shouldOverrideUrlLoading" event when the WKWebView is loading the first time,
+    // in order to have the same behavior as Android
+    var activateShouldOverrideUrlLoading = false
     
-    init(frame: CGRect, configuration: WKWebViewConfiguration, IABController: InAppBrowserWebViewController?, IAWController: FlutterWebViewController?) {
+    init(frame: CGRect, configuration: WKWebViewConfiguration, IABController: InAppBrowserWebViewController?, channel: FlutterMethodChannel?) {
         
         super.init(frame: frame, configuration: configuration)
+        self.channel = channel
         self.IABController = IABController
-        self.IAWController = IAWController
         uiDelegate = self
         navigationDelegate = self
         scrollView.delegate = self
@@ -637,9 +904,15 @@ public class InAppWebView: WKWebView, UIScrollViewDelegate, WKUIDelegate, WKNavi
     }
     
     public func prepare() {
+        
         addObserver(self,
                     forKeyPath: #keyPath(WKWebView.estimatedProgress),
                     options: .new,
+                    context: nil)
+        
+        addObserver(self,
+                    forKeyPath: #keyPath(WKWebView.url),
+                    options: [.new, .old],
                     context: nil)
         
         configuration.userContentController = WKUserContentController()
@@ -675,6 +948,13 @@ public class InAppWebView: WKWebView, UIScrollViewDelegate, WKUIDelegate, WKNavi
         let jscriptWebkitTouchCallout = WKUserScript(source: "document.body.style.webkitTouchCallout='none';", injectionTime: .atDocumentEnd, forMainFrameOnly: true)
         configuration.userContentController.addUserScript(jscriptWebkitTouchCallout)
         
+        let promisePolyfillJSScript = WKUserScript(source: promisePolyfillJS, injectionTime: .atDocumentStart, forMainFrameOnly: false)
+        configuration.userContentController.addUserScript(promisePolyfillJSScript)
+        
+        let javaScriptBridgeJSScript = WKUserScript(source: javaScriptBridgeJS, injectionTime: .atDocumentStart, forMainFrameOnly: false)
+        configuration.userContentController.addUserScript(javaScriptBridgeJSScript)
+        configuration.userContentController.add(self, name: "callHandler")
+        
         let consoleLogJSScript = WKUserScript(source: consoleLogJS, injectionTime: .atDocumentStart, forMainFrameOnly: false)
         configuration.userContentController.addUserScript(consoleLogJSScript)
         configuration.userContentController.add(self, name: "consoleLog")
@@ -683,9 +963,8 @@ public class InAppWebView: WKWebView, UIScrollViewDelegate, WKUIDelegate, WKNavi
         configuration.userContentController.add(self, name: "consoleInfo")
         configuration.userContentController.add(self, name: "consoleWarn")
         
-        let javaScriptBridgeJSScript = WKUserScript(source: javaScriptBridgeJS, injectionTime: .atDocumentStart, forMainFrameOnly: false)
-        configuration.userContentController.addUserScript(javaScriptBridgeJSScript)
-        configuration.userContentController.add(self, name: "callHandler")
+        let printJSScript = WKUserScript(source: printJS, injectionTime: .atDocumentStart, forMainFrameOnly: false)
+        configuration.userContentController.addUserScript(printJSScript)
         
         if (options?.useOnLoadResource)! {
             let resourceObserverJSScript = WKUserScript(source: resourceObserverJS, injectionTime: .atDocumentStart, forMainFrameOnly: false)
@@ -695,11 +974,6 @@ public class InAppWebView: WKWebView, UIScrollViewDelegate, WKUIDelegate, WKNavi
         let findTextHighlightJSScript = WKUserScript(source: findTextHighlightJS, injectionTime: .atDocumentStart, forMainFrameOnly: false)
         configuration.userContentController.addUserScript(findTextHighlightJSScript)
         configuration.userContentController.add(self, name: "onFindResultReceived")
-        
-        let interceptNavigationStateChangeJSScript = WKUserScript(source: interceptNavigationStateChangeJS, injectionTime: .atDocumentStart, forMainFrameOnly: false)
-        configuration.userContentController.addUserScript(interceptNavigationStateChangeJSScript)
-        configuration.userContentController.add(self, name: "onNavigationStateChange")
-        
         
         if (options?.useShouldInterceptAjaxRequest)! {
             let interceptAjaxRequestsJSScript = WKUserScript(source: interceptAjaxRequestsJS, injectionTime: .atDocumentStart, forMainFrameOnly: false)
@@ -771,12 +1045,15 @@ public class InAppWebView: WKWebView, UIScrollViewDelegate, WKUIDelegate, WKNavi
             if options?.preferredContentMode != nil {
                 configuration.defaultWebpagePreferences.preferredContentMode = WKWebpagePreferences.ContentMode(rawValue: (options?.preferredContentMode)!)!
             }
+            scrollView.automaticallyAdjustsScrollIndicatorInsets = (options?.automaticallyAdjustsScrollIndicatorInsets)!
         } else {
             // Fallback on earlier versions
         }
         
         scrollView.showsVerticalScrollIndicator = (options?.verticalScrollBarEnabled)!
         scrollView.showsHorizontalScrollIndicator = (options?.horizontalScrollBarEnabled)!
+        scrollView.showsVerticalScrollIndicator = !(options?.disableVerticalScroll)!
+        scrollView.showsHorizontalScrollIndicator = !(options?.disableHorizontalScroll)!
         
         // options.debuggingEnabled is always enabled for iOS.
         
@@ -816,6 +1093,8 @@ public class InAppWebView: WKWebView, UIScrollViewDelegate, WKUIDelegate, WKNavi
     public static func preWKWebViewConfiguration(options: InAppWebViewOptions?) -> WKWebViewConfiguration {
         let configuration = WKWebViewConfiguration()
         
+        configuration.processPool = WKProcessPoolManager.sharedProcessPool
+        
         if #available(iOS 10.0, *) {
             configuration.mediaTypesRequiringUserActionForPlayback = ((options?.mediaPlaybackRequiresUserGesture)!) ? .all : []
         } else {
@@ -843,6 +1122,9 @@ public class InAppWebView: WKWebView, UIScrollViewDelegate, WKUIDelegate, WKNavi
         if keyPath == #keyPath(WKWebView.estimatedProgress) {
             let progress = Int(estimatedProgress * 100)
             onProgressChanged(progress: progress)
+        } else if keyPath == #keyPath(WKWebView.url) && change?[NSKeyValueChangeKey.newKey] is URL {
+            let newUrl = change?[NSKeyValueChangeKey.newKey] as? URL
+            onUpdateVisitedHistory(url: newUrl!.absoluteString)
         }
     }
     
@@ -1057,9 +1339,18 @@ public class InAppWebView: WKWebView, UIScrollViewDelegate, WKUIDelegate, WKNavi
             // Fallback on earlier versions
         }
         
+        scrollView
+        
         if #available(iOS 13.0, *) {
-            configuration.preferences.isFraudulentWebsiteWarningEnabled = (options?.isFraudulentWebsiteWarningEnabled)!
-            configuration.defaultWebpagePreferences.preferredContentMode = WKWebpagePreferences.ContentMode(rawValue: (options?.preferredContentMode)!)!
+            if newOptionsMap["isFraudulentWebsiteWarningEnabled"] != nil && options?.isFraudulentWebsiteWarningEnabled != newOptions.isFraudulentWebsiteWarningEnabled {
+                configuration.preferences.isFraudulentWebsiteWarningEnabled = newOptions.isFraudulentWebsiteWarningEnabled
+            }
+            if newOptionsMap["preferredContentMode"] != nil && options?.preferredContentMode != newOptions.preferredContentMode {
+                configuration.defaultWebpagePreferences.preferredContentMode = WKWebpagePreferences.ContentMode(rawValue: newOptions.preferredContentMode)!
+            }
+            if newOptionsMap["automaticallyAdjustsScrollIndicatorInsets"] != nil && options?.automaticallyAdjustsScrollIndicatorInsets != newOptions.automaticallyAdjustsScrollIndicatorInsets {
+                scrollView.automaticallyAdjustsScrollIndicatorInsets = newOptions.automaticallyAdjustsScrollIndicatorInsets
+            }
         } else {
             // Fallback on earlier versions
         }
@@ -1069,6 +1360,13 @@ public class InAppWebView: WKWebView, UIScrollViewDelegate, WKUIDelegate, WKNavi
         }
         if newOptionsMap["horizontalScrollBarEnabled"] != nil && options?.horizontalScrollBarEnabled != newOptions.horizontalScrollBarEnabled {
             scrollView.showsHorizontalScrollIndicator = newOptions.horizontalScrollBarEnabled
+        }
+        
+        if newOptionsMap["disableVerticalScroll"] != nil && options?.disableVerticalScroll != newOptions.disableVerticalScroll {
+            scrollView.showsVerticalScrollIndicator = !newOptions.disableVerticalScroll
+        }
+        if newOptionsMap["disableHorizontalScroll"] != nil && options?.disableHorizontalScroll != newOptions.disableHorizontalScroll {
+            scrollView.showsHorizontalScrollIndicator = !newOptions.disableHorizontalScroll
         }
         
         if #available(iOS 9.0, *) {
@@ -1142,48 +1440,35 @@ public class InAppWebView: WKWebView, UIScrollViewDelegate, WKUIDelegate, WKNavi
         }
     }
     
-    public func injectDeferredObject(source: String, withWrapper jsWrapper: String, result: FlutterResult?) {
-        let jsonData: Data? = try? JSONSerialization.data(withJSONObject: [source], options: [])
-        let sourceArrayString = String(data: jsonData!, encoding: String.Encoding.utf8)
-        if sourceArrayString != nil {
+    public func injectDeferredObject(source: String, withWrapper jsWrapper: String?, result: FlutterResult?) {
+        var jsToInject = source
+        if let wrapper = jsWrapper {
+            let jsonData: Data? = try? JSONSerialization.data(withJSONObject: [source], options: [])
+            let sourceArrayString = String(data: jsonData!, encoding: String.Encoding.utf8)
             let sourceString: String? = (sourceArrayString! as NSString).substring(with: NSRange(location: 1, length: (sourceArrayString?.count ?? 0) - 2))
-            let jsToInject = String(format: jsWrapper, sourceString!)
-            
-            evaluateJavaScript(jsToInject, completionHandler: {(value, error) in
-                if result == nil {
-                    return
-                }
-                
-                if error != nil {
-                    let userInfo = (error! as NSError).userInfo
-                    self.onConsoleMessage(sourceURL: (userInfo["WKJavaScriptExceptionSourceURL"] as? URL)?.absoluteString ?? "", lineNumber: userInfo["WKJavaScriptExceptionLineNumber"] as! Int, message: userInfo["WKJavaScriptExceptionMessage"] as! String, messageLevel: 3)
-                }
-                
-                if value == nil {
-                    result!("")
-                    return
-                }
-                
-                do {
-                    let data: Data = ("[" + String(describing: value!) + "]").data(using: String.Encoding.utf8, allowLossyConversion: false)!
-                    let json: Array<Any> = try JSONSerialization.jsonObject(with: data, options: []) as! Array<Any>
-                    if json[0] is String {
-                        result!(json[0])
-                    }
-                    else {
-                        result!(value)
-                    }
-                } catch let error as NSError {
-                    result!(FlutterError(code: "InAppBrowserFlutterPlugin", message: "Failed to load: \(error.localizedDescription)", details: error))
-                }
-                
-            })
+            jsToInject = String(format: wrapper, sourceString!)
         }
+        evaluateJavaScript(jsToInject, completionHandler: {(value, error) in
+            if result == nil {
+                return
+            }
+            
+            if error != nil {
+                let userInfo = (error! as NSError).userInfo
+                self.onConsoleMessage(message: userInfo["WKJavaScriptExceptionMessage"] as? String ?? "", messageLevel: 3)
+            }
+            
+            if value == nil {
+                result!("")
+                return
+            }
+            
+            result!(value)
+        })
     }
     
     public func evaluateJavascript(source: String, result: FlutterResult?) {
-        let jsWrapper = "(function(){return JSON.stringify(eval(%@));})();"
-        injectDeferredObject(source: source, withWrapper: jsWrapper, result: result)
+        injectDeferredObject(source: source, withWrapper: nil, result: result)
     }
     
     public func injectJavascriptFileFromUrl(urlFile: String) {
@@ -1231,49 +1516,71 @@ public class InAppWebView: WKWebView, UIScrollViewDelegate, WKUIDelegate, WKNavi
                  decidePolicyFor navigationAction: WKNavigationAction,
                  decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
         
-        let app = UIApplication.shared
-        
         if let url = navigationAction.request.url {
-            // Handle target="_blank"
-            if navigationAction.targetFrame == nil && (options?.useOnTargetBlank)! {
-                onTargetBlank(url: url)
-                decisionHandler(.cancel)
-                return
-            }
             
-            if navigationAction.navigationType == .linkActivated && (options?.useShouldOverrideUrlLoading)! {
-                shouldOverrideUrlLoading(url: url)
-                decisionHandler(.cancel)
-                return
-            }
-            
-            // Handle phone and email links
-            if url.scheme == "tel" || url.scheme == "mailto" {
-                if app.canOpenURL(url) {
-                    if #available(iOS 10.0, *) {
-                        app.open(url)
-                    } else {
-                        app.openURL(url)
+            if activateShouldOverrideUrlLoading && (options?.useShouldOverrideUrlLoading)! {
+                
+                let isForMainFrame = navigationAction.targetFrame?.isMainFrame ?? false
+                
+                shouldOverrideUrlLoading(url: url, method: navigationAction.request.httpMethod, headers: navigationAction.request.allHTTPHeaderFields, isForMainFrame: isForMainFrame, navigationType: navigationAction.navigationType, result: { (result) -> Void in
+                    if result is FlutterError {
+                        print((result as! FlutterError).message)
                     }
-                }
-                decisionHandler(.cancel)
+                    else if (result as? NSObject) == FlutterMethodNotImplemented {
+                        self.updateUrlTextFieldForIABController(navigationAction: navigationAction)
+                        decisionHandler(.allow)
+                    }
+                    else {
+                        var response: [String: Any]
+                        if let r = result {
+                            response = r as! [String: Any]
+                            var action = response["action"] as? Int
+                            action = action != nil ? action : 0;
+                            switch action {
+                                case 1:
+                                    self.updateUrlTextFieldForIABController(navigationAction: navigationAction)
+                                    decisionHandler(.allow)
+                                    break
+                                default:
+                                    decisionHandler(.cancel)
+                            }
+                            return;
+                        }
+                        self.updateUrlTextFieldForIABController(navigationAction: navigationAction)
+                        decisionHandler(.allow)
+                    }
+                })
                 return
+                
             }
             
-            if navigationAction.navigationType == .linkActivated || navigationAction.navigationType == .backForward {
-                currentURL = url
-                if IABController != nil {
-                    IABController!.updateUrlTextField(url: (currentURL?.absoluteString)!)
-                }
-            }
+            updateUrlTextFieldForIABController(navigationAction: navigationAction)
+        }
+        
+        if !activateShouldOverrideUrlLoading {
+            activateShouldOverrideUrlLoading = true
         }
         
         decisionHandler(.allow)
     }
     
+    public func updateUrlTextFieldForIABController(navigationAction: WKNavigationAction) {
+        if navigationAction.navigationType == .linkActivated || navigationAction.navigationType == .backForward {
+            currentURL = url
+            if IABController != nil {
+                IABController!.updateUrlTextField(url: (currentURL?.absoluteString)!)
+            }
+        }
+    }
+    
     public func webView(_ webView: WKWebView,
                  decidePolicyFor navigationResponse: WKNavigationResponse,
                  decisionHandler: @escaping (WKNavigationResponsePolicy) -> Void) {
+        if navigationResponse.isForMainFrame, let response = navigationResponse.response as? HTTPURLResponse {
+            if response.statusCode >= 400 {
+                onLoadHttpError(url: response.url!.absoluteString, statusCode: response.statusCode, description: "")
+            }
+        }
         
         if (options?.useOnDownloadStart)! {
             let mimeType = navigationResponse.response.mimeType
@@ -1307,9 +1614,9 @@ public class InAppWebView: WKWebView, UIScrollViewDelegate, WKUIDelegate, WKNavi
     public func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
         currentURL = url
         InAppWebView.credentialsProposed = []
-        onLoadStop(url: (currentURL?.absoluteString)!)
         evaluateJavaScript(platformReadyJS, completionHandler: nil)
-        
+        onLoadStop(url: (currentURL?.absoluteString)!)
+                
         if IABController != nil {
             IABController!.updateUrlTextField(url: (currentURL?.absoluteString)!)
             IABController!.backButton.isEnabled = canGoBack
@@ -1361,7 +1668,10 @@ public class InAppWebView: WKWebView, UIScrollViewDelegate, WKUIDelegate, WKNavi
                         switch action {
                             case 0:
                                 InAppWebView.credentialsProposed = []
-                                completionHandler(.cancelAuthenticationChallenge, nil)
+                                // used .performDefaultHandling to mantain consistency with Android
+                                // because .cancelAuthenticationChallenge will call webView(_:didFail:withError:)
+                                completionHandler(.performDefaultHandling, nil)
+                                //completionHandler(.cancelAuthenticationChallenge, nil)
                                 break
                             case 1:
                                 let username = response["username"] as! String
@@ -1558,6 +1868,11 @@ public class InAppWebView: WKWebView, UIScrollViewDelegate, WKUIDelegate, WKNavi
     public func webView(_ webView: WKWebView, runJavaScriptAlertPanelWithMessage message: String,
                  initiatedByFrame frame: WKFrameInfo, completionHandler: @escaping () -> Void) {
         
+        if (isPausedTimers) {
+            isPausedTimersCompletionHandler = completionHandler
+            return
+        }
+        
         onJsAlert(message: message, result: {(result) -> Void in
             if result is FlutterError {
                 print((result as! FlutterError).message)
@@ -1732,12 +2047,37 @@ public class InAppWebView: WKWebView, UIScrollViewDelegate, WKUIDelegate, WKNavi
     }
     
     public func scrollViewDidScroll(_ scrollView: UIScrollView) {
-        if navigationDelegate != nil {
+        let disableVerticalScroll = options?.disableVerticalScroll ?? false
+        let disableHorizontalScroll = options?.disableHorizontalScroll ?? false
+        if disableVerticalScroll && disableHorizontalScroll {
+            scrollView.contentOffset = CGPoint(x: lastScrollX, y: lastScrollY);
+        }
+        else if disableVerticalScroll {
+            if (scrollView.contentOffset.y >= 0 || scrollView.contentOffset.y < 0) {
+                scrollView.contentOffset = CGPoint(x: scrollView.contentOffset.x, y: lastScrollY);
+            }
+        }
+        else if disableHorizontalScroll {
+            if (scrollView.contentOffset.x >= 0 || scrollView.contentOffset.x < 0) {
+                scrollView.contentOffset = CGPoint(x: lastScrollX, y: scrollView.contentOffset.y);
+            }
+        }
+        if navigationDelegate != nil && !(disableVerticalScroll && disableHorizontalScroll) {
             let x = Int(scrollView.contentOffset.x / scrollView.contentScaleFactor)
             let y = Int(scrollView.contentOffset.y / scrollView.contentScaleFactor)
             onScrollChanged(x: x, y: y)
         }
         setNeedsLayout()
+        lastScrollX = scrollView.contentOffset.x
+        lastScrollY = scrollView.contentOffset.y
+    }
+    
+    public func webView(_ webView: WKWebView,
+                        createWebViewWith configuration: WKWebViewConfiguration,
+                  for navigationAction: WKNavigationAction,
+                  windowFeatures: WKWindowFeatures) -> WKWebView? {
+        onCreateWindow(url: navigationAction.request.url!, navigationType: navigationAction.navigationType)
+        return nil
     }
     
     public func onLoadStart(url: String) {
@@ -1770,6 +2110,16 @@ public class InAppWebView: WKWebView, UIScrollViewDelegate, WKUIDelegate, WKNavi
         }
     }
     
+    public func onLoadHttpError(url: String, statusCode: Int, description: String) {
+        var arguments: [String: Any] = ["url": url, "statusCode": statusCode, "description": description]
+        if IABController != nil {
+            arguments["uuid"] = IABController!.uuid
+        }
+        if let channel = getChannel() {
+            channel.invokeMethod("onLoadHttpError", arguments: arguments)
+        }
+    }
+    
     public func onProgressChanged(progress: Int) {
         var arguments: [String: Any] = ["progress": progress]
         if IABController != nil {
@@ -1786,23 +2136,12 @@ public class InAppWebView: WKWebView, UIScrollViewDelegate, WKUIDelegate, WKNavi
             "numberOfMatches": numberOfMatches,
             "isDoneCounting": isDoneCounting
         ]
+        
         if IABController != nil {
             arguments["uuid"] = IABController!.uuid
         }
         if let channel = getChannel() {
             channel.invokeMethod("onFindResultReceived", arguments: arguments)
-        }
-    }
-    
-    public func onNavigationStateChange(url: String) {
-        var arguments: [String : Any] = [
-            "url": url
-        ]
-        if IABController != nil {
-            arguments["uuid"] = IABController!.uuid
-        }
-        if let channel = getChannel() {
-            channel.invokeMethod("onNavigationStateChange", arguments: arguments)
         }
     }
     
@@ -1836,23 +2175,36 @@ public class InAppWebView: WKWebView, UIScrollViewDelegate, WKUIDelegate, WKNavi
         }
     }
     
-    public func shouldOverrideUrlLoading(url: URL) {
-        var arguments: [String: Any] = ["url": url.absoluteString]
+    public func shouldOverrideUrlLoading(url: URL, method: String?, headers: [String: String]?, isForMainFrame: Bool, navigationType: WKNavigationType, result: FlutterResult?) {
+        var arguments: [String: Any?] = [
+            "url": url.absoluteString,
+            "method": method,
+            "headers": headers,
+            "isForMainFrame": isForMainFrame,
+            "androidHasGesture": nil,
+            "androidIsRedirect": nil,
+            "iosWKNavigationType": navigationType.rawValue
+        ]
         if IABController != nil {
             arguments["uuid"] = IABController!.uuid
         }
         if let channel = getChannel() {
-            channel.invokeMethod("shouldOverrideUrlLoading", arguments: arguments)
+            channel.invokeMethod("shouldOverrideUrlLoading", arguments: arguments, result: result)
         }
     }
     
-    public func onTargetBlank(url: URL) {
-        var arguments: [String: Any] = ["url": url.absoluteString]
+    public func onCreateWindow(url: URL, navigationType: WKNavigationType) {
+        var arguments: [String: Any?] = [
+            "url": url.absoluteString,
+            "androidIsDialog": nil,
+            "androidIsUserGesture": nil,
+            "iosWKNavigationType": navigationType.rawValue
+        ]
         if IABController != nil {
             arguments["uuid"] = IABController!.uuid
         }
         if let channel = getChannel() {
-            channel.invokeMethod("onTargetBlank", arguments: arguments)
+            channel.invokeMethod("onCreateWindow", arguments: arguments)
         }
     }
     
@@ -1945,13 +2297,26 @@ public class InAppWebView: WKWebView, UIScrollViewDelegate, WKUIDelegate, WKNavi
         }
     }
     
-    public func onConsoleMessage(sourceURL: String, lineNumber: Int, message: String, messageLevel: Int) {
-        var arguments: [String: Any] = ["sourceURL": sourceURL, "lineNumber": lineNumber, "message": message, "messageLevel": messageLevel]
+    public func onConsoleMessage(message: String, messageLevel: Int) {
+        var arguments: [String: Any] = ["message": message, "messageLevel": messageLevel]
         if IABController != nil {
             arguments["uuid"] = IABController!.uuid
         }
         if let channel = getChannel() {
             channel.invokeMethod("onConsoleMessage", arguments: arguments)
+        }
+    }
+    
+    public func onUpdateVisitedHistory(url: String) {
+        var arguments: [String: Any?] = [
+            "url": url,
+            "androidIsReload": nil
+        ]
+        if IABController != nil {
+            arguments["uuid"] = IABController!.uuid
+        }
+        if let channel = getChannel() {
+            channel.invokeMethod("onUpdateVisitedHistory", arguments: arguments)
         }
     }
     
@@ -1972,7 +2337,7 @@ public class InAppWebView: WKWebView, UIScrollViewDelegate, WKUIDelegate, WKNavi
                     if let r = result {
                         json = r as! String
                     }
-                    self.evaluateJavaScript("window.\(JAVASCRIPT_BRIDGE_NAME)[\(_callHandlerID)](\(json)); delete window.\(JAVASCRIPT_BRIDGE_NAME)[\(_callHandlerID)];", completionHandler: nil)
+                    self.evaluateJavaScript("if(window.\(JAVASCRIPT_BRIDGE_NAME)[\(_callHandlerID)] != null) {window.\(JAVASCRIPT_BRIDGE_NAME)[\(_callHandlerID)](\(json)); delete window.\(JAVASCRIPT_BRIDGE_NAME)[\(_callHandlerID)];}", completionHandler: nil)
                 }
             })
         }
@@ -1982,32 +2347,34 @@ public class InAppWebView: WKWebView, UIScrollViewDelegate, WKUIDelegate, WKNavi
         if message.name.starts(with: "console") {
             var messageLevel = 1
             switch (message.name) {
-            case "consoleLog":
-                messageLevel = 1
-                break;
-            case "consoleDebug":
-                // on Android, console.debug is TIP
-                messageLevel = 0
-                break;
-            case "consoleError":
-                messageLevel = 3
-                break;
-            case "consoleInfo":
-                // on Android, console.info is LOG
-                messageLevel = 1
-                break;
-            case "consoleWarn":
-                messageLevel = 2
-                break;
-            default:
-                messageLevel = 1
-                break;
+                case "consoleLog":
+                    messageLevel = 1
+                    break;
+                case "consoleDebug":
+                    // on Android, console.debug is TIP
+                    messageLevel = 0
+                    break;
+                case "consoleError":
+                    messageLevel = 3
+                    break;
+                case "consoleInfo":
+                    // on Android, console.info is LOG
+                    messageLevel = 1
+                    break;
+                case "consoleWarn":
+                    messageLevel = 2
+                    break;
+                default:
+                    messageLevel = 1
+                    break;
             }
-            onConsoleMessage(sourceURL: "", lineNumber: 1, message: message.body as! String, messageLevel: messageLevel)
-        }
-        else if message.name == "callHandler" {
+            onConsoleMessage(message: message.body as! String, messageLevel: messageLevel)
+        } else if message.name == "callHandler" {
             let body = message.body as! [String: Any]
             let handlerName = body["handlerName"] as! String
+            if handlerName == "onPrint" {
+                printCurrentPage(printCompletionHandler: nil)
+            }
             let _callHandlerID = body["_callHandlerID"] as! Int64
             let args = body["args"] as! String
             onCallJsHandler(handlerName: handlerName, _callHandlerID: _callHandlerID, args: args)
@@ -2019,34 +2386,87 @@ public class InAppWebView: WKWebView, UIScrollViewDelegate, WKUIDelegate, WKNavi
                 
                 self.onFindResultReceived(activeMatchOrdinal: activeMatchOrdinal, numberOfMatches: numberOfMatches, isDoneCounting: isDoneCounting)
             }
-        } else if message.name == "onNavigationStateChange" {
-            if let resource = convertToDictionary(text: message.body as! String) {
-                let url = resource["url"] as! String
-                
-                self.onNavigationStateChange(url: url)
-            }
-           
         }
     }
     
     private func getChannel() -> FlutterMethodChannel? {
-        return (IABController != nil) ? SwiftFlutterPlugin.instance!.channel! : ((IAWController != nil) ? IAWController!.channel! : nil);
+        return (IABController != nil) ? SwiftFlutterPlugin.instance!.channel! : ((channel != nil) ? channel! : nil);
     }
     
-    func findAllAsync(find: String?, completionHandler: ((Any?, Error?) -> Void)?) {
+    public func findAllAsync(find: String?, completionHandler: ((Any?, Error?) -> Void)?) {
         let startSearch = "wkwebview_FindAllAsync('\(find ?? "")');"
         evaluateJavaScript(startSearch, completionHandler: completionHandler)
     }
 
-    func findNext(forward: Bool, completionHandler: ((Any?, Error?) -> Void)?) {
+    public func findNext(forward: Bool, completionHandler: ((Any?, Error?) -> Void)?) {
         evaluateJavaScript("wkwebview_FindNext(\(forward ? "true" : "false"));", completionHandler: completionHandler)
     }
 
-    func clearMatches(completionHandler: ((Any?, Error?) -> Void)?) {
+    public func clearMatches(completionHandler: ((Any?, Error?) -> Void)?) {
         evaluateJavaScript("wkwebview_ClearMatches();", completionHandler: completionHandler)
     }
     
-    public override func removeFromSuperview() {
+    public func scrollTo(x: Int, y: Int) {
+        scrollView.setContentOffset(CGPoint(x: x, y: y), animated: false)
+    }
+    
+    public func scrollBy(x: Int, y: Int) {
+        let newX = CGFloat(x) + scrollView.contentOffset.x
+        let newY = CGFloat(y) + scrollView.contentOffset.y
+        scrollView.setContentOffset(CGPoint(x: newX, y: newY), animated: false)
+    }
+    
+    
+    public func pauseTimers() {
+        isPausedTimers = true
+        let script = "alert();";
+        self.evaluateJavaScript(script, completionHandler: nil)
+    }
+    
+    public func resumeTimers() {
+        if let completionHandler = isPausedTimersCompletionHandler {
+            completionHandler()
+            isPausedTimersCompletionHandler = nil
+        }
+        isPausedTimers = false
+    }
+    
+    public func printCurrentPage(printCompletionHandler: ((_ completed: Bool, _ error: Error?) -> Void)?) {
+        let printController = UIPrintInteractionController.shared
+        let printFormatter = self.viewPrintFormatter()
+        printController.printFormatter = printFormatter
+        
+        let completionHandler: UIPrintInteractionController.CompletionHandler = { (printController, completed, error) in
+            if !completed {
+                if let e = error {
+                    print("[PRINT] Failed: \(e.localizedDescription)")
+                } else {
+                    print("[PRINT] Canceled")
+                }
+            }
+            if let callback = printCompletionHandler {
+                callback(completed, error)
+            }
+        }
+        
+        printController.present(animated: true, completionHandler: completionHandler)
+    }
+    
+    public func getContentHeight() -> Int64 {
+        return Int64(scrollView.contentSize.height)
+    }
+    
+    public func zoomBy(zoomFactor: Float) {
+        let currentZoomScale = scrollView.zoomScale
+        scrollView.setZoomScale(currentZoomScale * CGFloat(zoomFactor), animated: false)
+    }
+    
+    public func getScale() -> Float {
+        return Float(scrollView.zoomScale)
+    }
+    
+    public func dispose() {
+        stopLoading()
         configuration.userContentController.removeScriptMessageHandler(forName: "consoleLog")
         configuration.userContentController.removeScriptMessageHandler(forName: "consoleDebug")
         configuration.userContentController.removeScriptMessageHandler(forName: "consoleError")
@@ -2054,15 +2474,21 @@ public class InAppWebView: WKWebView, UIScrollViewDelegate, WKUIDelegate, WKNavi
         configuration.userContentController.removeScriptMessageHandler(forName: "consoleWarn")
         configuration.userContentController.removeScriptMessageHandler(forName: "callHandler")
         configuration.userContentController.removeScriptMessageHandler(forName: "onFindResultReceived")
-        configuration.userContentController.removeScriptMessageHandler(forName: "onNavigationStateChange")
         configuration.userContentController.removeAllUserScripts()
-        removeObserver(self, forKeyPath: "estimatedProgress")
-        super.removeFromSuperview()
+        removeObserver(self, forKeyPath: #keyPath(WKWebView.estimatedProgress))
+        removeObserver(self, forKeyPath: #keyPath(WKWebView.url))
+        if #available(iOS 11.0, *) {
+            configuration.userContentController.removeAllContentRuleLists()
+        }
         uiDelegate = nil
         navigationDelegate = nil
         scrollView.delegate = nil
-        IAWController?.channel?.setMethodCallHandler(nil)
         IABController?.webView = nil
-        IAWController?.webView = nil
+        isPausedTimersCompletionHandler = nil
+        super.removeFromSuperview()
+    }
+    
+    deinit {
+        print("InAppWebView - dealloc")
     }
 }

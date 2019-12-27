@@ -1,14 +1,19 @@
 import 'dart:async';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 
-///Manages the cookies used by WebView instances.
+import 'types.dart';
+
+///CookieManager class implements a singleton object (shared instance) which manages the cookies used by WebView instances.
 ///
 ///**NOTE for iOS**: available from iOS 11.0+.
 class CookieManager {
   static CookieManager _instance;
-  static const MethodChannel _channel = const MethodChannel('com.pichillilorenzo/flutter_inappbrowser_cookiemanager');
+  static const MethodChannel _channel = const MethodChannel(
+      'com.pichillilorenzo/flutter_inappwebview_cookiemanager');
 
+  ///Gets the cookie manager shared instance.
   static CookieManager instance() {
     return (_instance != null) ? _instance : _init();
   }
@@ -19,21 +24,22 @@ class CookieManager {
     return _instance;
   }
 
-  static Future<dynamic> _handleMethod(MethodCall call) async {
-  }
+  static Future<dynamic> _handleMethod(MethodCall call) async {}
 
   ///Sets a cookie for the given [url]. Any existing cookie with the same [host], [path] and [name] will be replaced with the new cookie. The cookie being set will be ignored if it is expired.
   ///
   ///The default value of [path] is `"/"`.
   ///If [domain] is `null`, its default value will be the domain name of [url].
-  Future<void> setCookie(String url, String name, String value,
-      { String domain,
-        String path = "/",
-        int expiresDate,
-        int maxAge,
-        bool isSecure }) async {
-    if (domain == null)
-      domain = _getDomainName(url);
+  Future<void> setCookie(
+      {@required String url,
+      @required String name,
+      @required String value,
+      String domain,
+      String path = "/",
+      int expiresDate,
+      int maxAge,
+      bool isSecure}) async {
+    if (domain == null) domain = _getDomainName(url);
 
     assert(url != null && url.isNotEmpty);
     assert(name != null && name.isNotEmpty);
@@ -55,22 +61,25 @@ class CookieManager {
   }
 
   ///Gets all the cookies for the given [url].
-  Future<List<Map<String, dynamic>>> getCookies(String url) async {
+  Future<List<Cookie>> getCookies({@required String url}) async {
     assert(url != null && url.isNotEmpty);
 
     Map<String, dynamic> args = <String, dynamic>{};
     args.putIfAbsent('url', () => url);
-    List<dynamic> cookies = await _channel.invokeMethod('getCookies', args);
-    cookies = cookies.cast<Map<dynamic, dynamic>>();
-    for(var i = 0; i < cookies.length; i++) {
-      cookies[i] = cookies[i].cast<String, dynamic>();
+    List<dynamic> cookieListMap =
+        await _channel.invokeMethod('getCookies', args);
+    cookieListMap = cookieListMap.cast<Map<dynamic, dynamic>>();
+    List<Cookie> cookies = [];
+    for (var i = 0; i < cookieListMap.length; i++) {
+      cookies.add(Cookie(
+          name: cookieListMap[i]["name"], value: cookieListMap[i]["value"]));
     }
-    cookies = cookies.cast<Map<String, dynamic>>();
     return cookies;
   }
 
   ///Gets a cookie by its [name] for the given [url].
-  Future<Map<String, dynamic>> getCookie(String url, String name) async {
+  Future<Cookie> getCookie(
+      {@required String url, @required String name}) async {
     assert(url != null && url.isNotEmpty);
     assert(name != null && name.isNotEmpty);
 
@@ -78,10 +87,10 @@ class CookieManager {
     args.putIfAbsent('url', () => url);
     List<dynamic> cookies = await _channel.invokeMethod('getCookies', args);
     cookies = cookies.cast<Map<dynamic, dynamic>>();
-    for(var i = 0; i < cookies.length; i++) {
+    for (var i = 0; i < cookies.length; i++) {
       cookies[i] = cookies[i].cast<String, dynamic>();
       if (cookies[i]["name"] == name)
-        return cookies[i];
+        return Cookie(name: cookies[i]["name"], value: cookies[i]["value"]);
     }
     return null;
   }
@@ -90,9 +99,12 @@ class CookieManager {
   ///
   ///The default value of [path] is `"/"`.
   ///If [domain] is `null` or empty, its default value will be the domain name of [url].
-  Future<void> deleteCookie(String url, String name, {String domain = "", String path = "/"}) async {
-    if (domain == null || domain.isEmpty)
-      domain = _getDomainName(url);
+  Future<void> deleteCookie(
+      {@required String url,
+      @required String name,
+      String domain = "",
+      String path = "/"}) async {
+    if (domain == null || domain.isEmpty) domain = _getDomainName(url);
 
     assert(url != null && url.isNotEmpty);
     assert(name != null && name.isNotEmpty);
@@ -111,9 +123,9 @@ class CookieManager {
   ///
   ///The default value of [path] is `"/"`.
   ///If [domain] is `null` or empty, its default value will be the domain name of [url].
-  Future<void> deleteCookies(String url, {String domain = "", String path = "/"}) async {
-    if (domain == null || domain.isEmpty)
-      domain = _getDomainName(url);
+  Future<void> deleteCookies(
+      {@required String url, String domain = "", String path = "/"}) async {
+    if (domain == null || domain.isEmpty) domain = _getDomainName(url);
 
     assert(url != null && url.isNotEmpty);
     assert(domain != null && url.isNotEmpty);
@@ -135,8 +147,7 @@ class CookieManager {
   String _getDomainName(String url) {
     Uri uri = Uri.parse(url);
     String domain = uri.host;
-    if (domain == null)
-      return "";
+    if (domain == null) return "";
     return domain.startsWith("www.") ? domain.substring(4) : domain;
   }
 }

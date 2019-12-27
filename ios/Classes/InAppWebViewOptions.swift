@@ -1,6 +1,6 @@
 //
 //  InAppWebViewOptions.swift
-//  flutter_inappbrowser
+//  flutter_inappwebview
 //
 //  Created by Lorenzo on 21/10/18.
 //
@@ -14,7 +14,6 @@ public class InAppWebViewOptions: Options {
     var useShouldOverrideUrlLoading = false
     var useOnLoadResource = false
     var useOnDownloadStart = false
-    var useOnTargetBlank = false
     var clearCache = false
     var userAgent = ""
     var applicationNameForUserAgent = ""
@@ -32,6 +31,8 @@ public class InAppWebViewOptions: Options {
     var incognito = false
     var cacheEnabled = true
     var transparentBackground = false
+    var disableVerticalScroll = false
+    var disableHorizontalScroll = false
 
     var disallowOverScroll = false
     var enableViewportScale = false
@@ -47,6 +48,7 @@ public class InAppWebViewOptions: Options {
     var dataDetectorTypes: [String] = ["NONE"] // WKDataDetectorTypeNone
     var preferredContentMode = 0
     var sharedCookiesEnabled = false
+    var automaticallyAdjustsScrollIndicatorInsets = false
     
     override init(){
         super.init()
